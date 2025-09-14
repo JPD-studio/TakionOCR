@@ -13,7 +13,6 @@ export enum ErrorType {
 
 export interface OcrConfig {
   textractEnabled: boolean;
-  tesseractEnabled: boolean;
   maxPagesPerMonth: number;
   maxFileSize: number;
   maxPagesPerFile: number;
@@ -22,16 +21,21 @@ export interface OcrConfig {
 }
 
 export interface OcrResult {
-  success: boolean;
-  engine: 'textract' | 'tesseract';
-  text: string;
-  confidence?: number;
+  engine: string;
+  inputFile: string;
+  fileSize: number;
   pageCount: number;
-  processingTime: number;
-  error?: {
-    type: ErrorType;
-    message: string;
-    details?: any;
+  processingTimeMs: number;
+  pages: {
+    pageNumber: number;
+    text: string;
+    confidence: number;
+    blockCount: number;
+  }[];
+  metadata: {
+    timestamp: string;
+    version: string;
+    region: string;
   };
 }
 

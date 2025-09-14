@@ -11,6 +11,11 @@ export class UsageManager {
   constructor(private logger: Logger) {}
   
   async checkUsageLimit(additionalPages: number): Promise<void> {
+    if (!this.tableName) {
+      this.logger.info('Usage limit check skipped (no table configured)');
+      return;
+    }
+    
     const currentMonth = this.getCurrentMonthKey();
     const usage = await this.getCurrentUsage(currentMonth);
     const config = await new ConfigManager().getConfig();
@@ -35,6 +40,11 @@ export class UsageManager {
   }
   
   async updateUsage(pageCount: number): Promise<void> {
+    if (!this.tableName) {
+      this.logger.info('Usage update skipped (no table configured)');
+      return;
+    }
+    
     const currentMonth = this.getCurrentMonthKey();
     
     const command = new UpdateItemCommand({
@@ -55,6 +65,10 @@ export class UsageManager {
   }
   
   private async getCurrentUsage(monthKey: string): Promise<UsageData> {
+    if (!this.tableName) {
+      return { totalPages: 0, totalFiles: 0, lastUpdated: new Date().toISOString() };
+    }
+    
     const command = new GetItemCommand({
       TableName: this.tableName,
       Key: {

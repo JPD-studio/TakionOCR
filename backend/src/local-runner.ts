@@ -3,6 +3,8 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { OcrProcessor } from './ocr-processor';
 import { Logger } from './logger';
+import * as fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -39,9 +41,22 @@ async function runLocal(): Promise<void> {
   try {
     const processor = new OcrProcessor(logger);
     
-    // Generate proper output file path
+    // Generate proper output file path. If the provided --output looks like a file (.json), use it directly.
     const inputFileName = filePath.split('/').pop()?.replace('.pdf', '') || 'output';
-    const outputPath = `${outputDir}/${inputFileName}-result.json`;
+    let outputPath: string;
+    if (path.extname(String(outputDir)).toLowerCase() === '.json') {
+      outputPath = String(outputDir);
+    } else {
+      outputPath = `${outputDir}/${inputFileName}-result.json`;
+    }
+
+    // Ensure parent directory exists
+    const parentDir = path.dirname(outputPath);
+    try {
+      fs.mkdirSync(parentDir, { recursive: true });
+    } catch (e) {
+      // ignore mkdir errors and let the write fail later with a clear error
+    }
     
     await processor.processLocalFile(filePath, outputPath, engine);
     logger.info('Local processing completed', { filePath, outputPath });

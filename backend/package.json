@@ -10,7 +10,9 @@
     "test:watch": "jest --watch",
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
-    "ocr-local": "ts-node src/local-runner.ts"
+    "ocr-local": "ts-node src/local-runner.ts",
+    "ocr-s3-local": "ts-node src/local-s3-runner.ts",
+    "lambda-test": "ts-node src/local-s3-runner.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.400.0",

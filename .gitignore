@@ -18,6 +18,13 @@ Thumbs.db
 
 # Exclude large files
 *.zip
+*.traineddata
+
+# Large sample/test files (>1MB)
+samples/**/*.pdf
+output/
+*.tar.gz
+*.dmg
 *.tar.gz
 *.rar
 *.7z

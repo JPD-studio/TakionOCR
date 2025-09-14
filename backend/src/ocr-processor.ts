@@ -8,7 +8,9 @@ import { MetricsService } from './metrics-service';
 import { Logger } from './logger';
 import { 
   OcrResult, 
-  OcrConfig 
+  OcrConfig,
+  TableCell,
+  Table
 } from './types';
 
 export class OcrProcessor {
@@ -227,24 +229,22 @@ export class OcrProcessor {
     } else {
       imageBuffers = [fileBuffer];
     }
-    
+
     // 各ページに対してTextract Analyzeを実行
     const pageResults: Array<{ 
       text: string; 
       confidence: number; 
       blockCount: number;
       keyValuePairs: Array<{key: string, value: string}>;
-      tables: Array<any>;
+      tables: Table[];
     }> = [];
-    
+
     for (let i = 0; i < imageBuffers.length; i++) {
       const command = new AnalyzeDocumentCommand({
-        Document: {
-          Bytes: imageBuffers[i]
-        },
-        FeatureTypes: ['TABLES', 'FORMS']
+        Document: { Bytes: imageBuffers[i] },
+        FeatureTypes: ['FORMS', 'TABLES']
       });
-      
+
       const response = await this.retryManager.executeWithRetry(
         () => this.textractClient.send(command),
         config.maxRetryAttempts,
@@ -267,7 +267,11 @@ export class OcrProcessor {
         tables
       });
     }
-    
+
+    // 全ページの結果をまとめる
+    const allKeyValuePairs = pageResults.flatMap(result => result.keyValuePairs);
+    const allTables = pageResults.flatMap(result => result.tables);
+
     return {
       engine: 'textract-analyze',
       inputFile: 'local.pdf',
@@ -278,8 +282,12 @@ export class OcrProcessor {
         pageNumber: index + 1,
         text: result.text,
         confidence: result.confidence,
-        blockCount: result.blockCount
+        blockCount: result.blockCount,
+        ...(result.keyValuePairs.length > 0 && { forms: result.keyValuePairs }),
+        ...(result.tables.length > 0 && { tables: result.tables })
       })),
+      forms: allKeyValuePairs,
+      tables: allTables,
       metadata: {
         timestamp: new Date().toISOString(),
         version: '1.0.0',
@@ -290,70 +298,84 @@ export class OcrProcessor {
 
   private extractKeyValuePairs(blocks: Block[]): Array<{key: string, value: string}> {
     const keyValuePairs: Array<{key: string, value: string}> = [];
-    
-    const keyBlocks = blocks.filter(block => block.BlockType === 'KEY_VALUE_SET' && block.EntityTypes?.includes('KEY'));
-    
-    for (const keyBlock of keyBlocks) {
-      if (keyBlock.Relationships) {
-        const valueRelationship = keyBlock.Relationships.find(rel => rel.Type === 'VALUE');
-        if (valueRelationship?.Ids) {
-          const valueBlock = blocks.find(block => block.Id === valueRelationship.Ids![0]);
-          if (valueBlock) {
-            const keyText = this.extractTextFromBlock(keyBlock, blocks);
-            const valueText = this.extractTextFromBlock(valueBlock, blocks);
-            keyValuePairs.push({ key: keyText, value: valueText });
-          }
-        }
+    const keyMap = new Map<string, Block>();
+    const valueMap = new Map<string, Block>();
+    const blockMap = new Map<string, Block>();
+
+    blocks.forEach(block => {
+      blockMap.set(block.Id!, block);
+      if (block.BlockType === 'KEY_VALUE_SET' && block.EntityTypes?.includes('KEY')) {
+        keyMap.set(block.Id!, block);
+      } else if (block.BlockType === 'KEY_VALUE_SET' && block.EntityTypes?.includes('VALUE')) {
+        valueMap.set(block.Id!, block);
       }
-    }
-    
+    });
+
+    keyMap.forEach((keyBlock) => {
+      const valueBlock = keyBlock.Relationships?.find(rel => rel.Type === 'VALUE')?.Ids?.map(id => valueMap.get(id))[0];
+      const keyText = this.getTextForBlock(keyBlock, blockMap);
+      const valueText = valueBlock ? this.getTextForBlock(valueBlock, blockMap) : '';
+      if (keyText) {
+        keyValuePairs.push({ key: keyText, value: valueText });
+      }
+    });
+
     return keyValuePairs;
   }
 
-  private extractTextFromBlock(block: Block, allBlocks: Block[]): string {
-    if (block.Text) {
-      return block.Text;
-    }
+  private extractTables(blocks: Block[]): Table[] {
+    const tables: Table[] = [];
+    const blockMap = new Map<string, Block>();
     
-    if (block.Relationships) {
-      const childRelationship = block.Relationships.find(rel => rel.Type === 'CHILD');
-      if (childRelationship?.Ids) {
-        return childRelationship.Ids
-          .map(id => allBlocks.find(b => b.Id === id)?.Text)
-          .filter(Boolean)
-          .join('');
-      }
-    }
-    
-    return '';
-  }
+    blocks.forEach(block => {
+      blockMap.set(block.Id!, block);
+    });
 
-  private extractTables(blocks: Block[]): Array<any> {
-    const tables: Array<any> = [];
-    
     const tableBlocks = blocks.filter(block => block.BlockType === 'TABLE');
-    
-    for (const tableBlock of tableBlocks) {
-      if (tableBlock.Relationships) {
-        const cellRelationship = tableBlock.Relationships.find(rel => rel.Type === 'CHILD');
-        if (cellRelationship?.Ids) {
-          const cells = cellRelationship.Ids
-            .map(id => blocks.find(block => block.Id === id))
-            .filter(Boolean);
-          
-          // Simple table structure - could be enhanced
-          tables.push({
-            cells: cells.map(cell => ({
-              text: this.extractTextFromBlock(cell!, blocks),
-              rowIndex: cell?.RowIndex,
-              columnIndex: cell?.ColumnIndex
-            }))
+    tableBlocks.forEach(tableBlock => {
+      const cellBlocks = tableBlock.Relationships?.find(rel => rel.Type === 'CHILD')?.Ids?.map(id => blockMap.get(id)) || [];
+      const cells: TableCell[] = [];
+
+      cellBlocks.forEach(cellBlock => {
+        if (cellBlock && cellBlock.BlockType === 'CELL') {
+          const cellText = this.getTextForBlock(cellBlock, blockMap);
+          cells.push({
+            text: cellText,
+            rowIndex: cellBlock.RowIndex || 0,
+            columnIndex: cellBlock.ColumnIndex || 0
           });
         }
+      });
+
+      // Build 2D rows representation from cells
+      let rows: string[][] | undefined = undefined;
+      if (cells.length > 0) {
+        const maxRow = Math.max(...cells.map(c => c.rowIndex || 0));
+        const maxCol = Math.max(...cells.map(c => c.columnIndex || 0));
+
+        if (maxRow > 0 && maxCol > 0) {
+          rows = Array.from({ length: maxRow }, () => Array.from({ length: maxCol }, () => ''));
+          for (const c of cells) {
+            const r = (c.rowIndex || 0) - 1;
+            const co = (c.columnIndex || 0) - 1;
+            if (r >= 0 && co >= 0 && r < rows.length && co < rows[r].length) {
+              rows[r][co] = c.text || '';
+            }
+          }
+        }
       }
-    }
-    
+
+  tables.push({ cells, rows: rows || [] });
+    });
+
     return tables;
+  }
+
+  private getTextForBlock(block: Block, blockMap: Map<string, Block>): string {
+    if (!block.Relationships) return '';
+    return block.Relationships.filter(rel => rel.Type === 'CHILD')
+      .flatMap(rel => rel.Ids?.map(id => blockMap.get(id)?.Text || '') || [])
+      .join(' ');
   }
 
   private calculateAverageConfidence(blocks: Block[]): number {

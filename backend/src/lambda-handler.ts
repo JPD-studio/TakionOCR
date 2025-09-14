@@ -1,5 +1,5 @@
 import { S3Event, Context } from 'aws-lambda';
-import { OcrProcessor } from './ocr-processor';
+import { LambdaOcrProcessor } from './lambda-ocr-processor';
 import { Logger } from './logger';
 
 export const handler = async (event: S3Event, context: Context): Promise<void> => {
@@ -9,15 +9,19 @@ export const handler = async (event: S3Event, context: Context): Promise<void> =
     const records = event.Records;
     
     for (const record of records) {
-      const bucket = record.s3.bucket.name;
-      const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
+      const inputBucket = record.s3.bucket.name;
+      const inputKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
       
-      logger.info('Processing started', { bucket, key });
+      // Generate output key (same bucket, different prefix)
+      const outputBucket = process.env.OUTPUT_BUCKET || inputBucket;
+      const outputKey = `processed/${inputKey.replace(/\.[^/.]+$/, '')}-result.json`;
       
-      const processor = new OcrProcessor(logger);
-      await processor.processFile(bucket, key);
+      logger.info('Processing started', { inputBucket, inputKey, outputBucket, outputKey });
       
-      logger.info('Processing completed', { bucket, key });
+      const processor = new LambdaOcrProcessor(logger);
+      await processor.processS3File(inputBucket, inputKey, outputBucket, outputKey);
+      
+      logger.info('Processing completed', { inputBucket, inputKey });
     }
   } catch (error) {
     logger.error('Lambda execution failed', { error: (error as Error).message });

@@ -20,6 +20,17 @@ export interface OcrConfig {
   maxRetryAttempts: number;
 }
 
+export interface TableCell {
+  text: string;
+  rowIndex: number;
+  columnIndex: number;
+}
+
+export interface Table {
+  cells: TableCell[];
+  rows?: string[][];
+}
+
 export interface OcrResult {
   engine: string;
   inputFile: string;
@@ -31,12 +42,16 @@ export interface OcrResult {
     text: string;
     confidence: number;
     blockCount: number;
+    forms?: Array<{ key: string; value: string }>;
+    tables?: Table[];
   }[];
   metadata: {
     timestamp: string;
     version: string;
     region: string;
   };
+  forms?: Array<{ key: string; value: string }>;
+  tables?: Table[];
 }
 
 export interface UsageData {

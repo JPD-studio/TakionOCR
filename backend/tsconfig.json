@@ -27,6 +27,9 @@
   "exclude": [
     "node_modules",
     "dist",
-    "tests"
+    "tests",
+    "src/ocr-processor-textract.ts",
+    "src/file-validator.ts",
+    "src/file-validator-simple.ts"
   ]
 }

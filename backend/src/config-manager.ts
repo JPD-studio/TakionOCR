@@ -44,14 +44,16 @@ export class ConfigManager {
       maxFileSize,
       maxPagesPerFile,
       ocrTimeout,
-      maxRetryAttempts
+      maxRetryAttempts,
+      rekognitionEnabled
     ] = await Promise.all([
       this.getParameter('/config/pdf-ocr/textract-enabled'),
       this.getParameter('/config/pdf-ocr/max-pages-per-month'),
       this.getParameter('/config/pdf-ocr/max-file-size-mb'),
       this.getParameter('/config/pdf-ocr/max-pages-per-file'),
       this.getParameter('/config/pdf-ocr/ocr-timeout-seconds'),
-      this.getParameter('/config/pdf-ocr/max-retry-attempts')
+      this.getParameter('/config/pdf-ocr/max-retry-attempts'),
+      this.getParameter('/config/pdf-ocr/rekognition-shape-detection-enabled')
     ]);
     
     return {
@@ -60,7 +62,8 @@ export class ConfigManager {
       maxFileSize: parseInt(maxFileSize) || 10,
       maxPagesPerFile: parseInt(maxPagesPerFile) || 50,
       ocrTimeout: parseInt(ocrTimeout) || 300,
-      maxRetryAttempts: parseInt(maxRetryAttempts) || 3
+      maxRetryAttempts: parseInt(maxRetryAttempts) || 3,
+      rekognitionEnabled: rekognitionEnabled === 'true'
     };
   }
 }

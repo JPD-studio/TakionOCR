@@ -9,10 +9,14 @@ import { ConfigManager } from './config-manager';
 import { RetryManager } from './retry-manager';
 import { MetricsService } from './metrics-service';
 import { Logger } from './logger';
+import { RekognitionShapeDetector } from './rekognition-shape-detector';
+import { PdfImageConverter } from './pdf-image-converter';
 import { 
   OcrResult, 
+  OcrConfig,
   TableCell,
-  Table
+  Table,
+  PageShapeAnalysis
 } from './types';
 
 export class LambdaOcrProcessor {
@@ -76,14 +80,15 @@ export class LambdaOcrProcessor {
       );
       
       // Process results
-      const result = this.processTextractBlocks(
-        analysisResult.blocks,
-        inputKey,
-        fileSize,
-        startTime
-      );
-      
-      // Save result to S3 if output location specified
+      const result = await this.processTextractBlocks(
+        analysisResult.blocks, 
+        inputKey, 
+        fileSize, 
+        startTime,
+        config,
+        inputBucket,
+        inputKey
+      );      // Save result to S3 if output location specified
       if (outputBucket && outputKey) {
         const putObjectCommand = new PutObjectCommand({
           Bucket: outputBucket,
@@ -154,13 +159,60 @@ export class LambdaOcrProcessor {
     throw new Error(`Textract analysis job timed out after ${timeoutMs}ms`);
   }
 
-  private processTextractBlocks(
+  private async processTextractBlocks(
     blocks: Block[], 
     inputFile: string, 
     fileSize: number, 
-    startTime: number
-  ): OcrResult {
-    // Extract text by pages
+    startTime: number,
+    config: OcrConfig,
+    inputBucket: string,
+    inputKey: string
+  ): Promise<OcrResult> {
+    // 図形検出が有効な場合、PDF→画像変換→図形検出を実行
+    let pageShapeAnalyses: PageShapeAnalysis[] = [];
+    
+    if (config.rekognitionEnabled) {
+      try {
+        this.logger.info('Starting integrated shape detection', { inputFile });
+        
+        // S3からPDFファイルを取得
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: inputBucket,
+          Key: inputKey
+        });
+        const response = await this.s3Client.send(getObjectCommand);
+        const fileBuffer = await response.Body?.transformToByteArray();
+        
+        if (fileBuffer) {
+          // PDF→画像変換（OCRと同じタイミングで実行）
+          const pdfConverter = new PdfImageConverter(this.logger);
+          const pageImages = await pdfConverter.convertPdfToImages(Buffer.from(fileBuffer), {
+            density: 150,    // Rekognition用最適化
+            format: 'png',   // Rekognition対応フォーマット
+            width: 1024,
+            height: 1024
+          });
+          
+          // 変換した画像で図形検出実行
+          const shapeDetector = new RekognitionShapeDetector(this.logger);
+          pageShapeAnalyses = await shapeDetector.analyzePageImages(pageImages);
+          
+          this.logger.info('Shape detection completed', { 
+            inputFile,
+            pagesProcessed: pageShapeAnalyses.length,
+            shapesDetected: pageShapeAnalyses.reduce((total, page) => total + page.shape_count, 0)
+          });
+        }
+      } catch (error) {
+        this.logger.warn('Shape detection failed, continuing with OCR only', { 
+          inputFile, 
+          error: (error as Error).message 
+        });
+        // 図形検出失敗時はフォールバック結果で継続
+      }
+    }
+
+    // Textractのページ処理（従来通り）
     const pageBlocks = blocks.filter(block => block.BlockType === 'PAGE');
     const pageResults = pageBlocks.map((pageBlock, index) => {
       const pageNumber = pageBlock.Page || (index + 1);
@@ -180,13 +232,17 @@ export class LambdaOcrProcessor {
       const pageText = pageLines.map(line => line.Text).join('\n');
       const confidence = this.calculateAverageConfidence(pageLines);
       
+      // 対応するページの図形検出結果を取得
+      const shapes = pageShapeAnalyses[index] || undefined;
+      
       return {
         pageNumber: index + 1,
         text: pageText,
         confidence,
         blockCount: pageLines.length,
         ...(pageForms.length > 0 && { forms: pageForms }),
-        ...(pageTables.length > 0 && { tables: pageTables })
+        ...(pageTables.length > 0 && { tables: pageTables }),
+        ...(shapes && { shapes })
       };
     });
     
@@ -205,7 +261,7 @@ export class LambdaOcrProcessor {
       tables,
       metadata: {
         timestamp: new Date().toISOString(),
-        version: '1.0.0',
+        version: '3.0.0',  // v3.0に更新
         region: process.env.AWS_DEFAULT_REGION || 'us-east-1'
       }
     };
